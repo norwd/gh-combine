@@ -1,35 +1,122 @@
 #!/usr/bin/env bash
+
 set -e
 
-echo "Hello gh-combine!"
+bold() {
+	if [ -x "$(command -v tput)" ]
+	then
+		tput bold
+	fi
 
-# Snippets to help get started:
+	echo "$@"
 
-# Determine if an executable is in the PATH
-# if ! type -p ruby >/dev/null; then
-#   echo "Ruby not found on the system" >&2
-#   exit 1
-# fi
+	if [ -x "$(command -v tput)" ]
+	then
+		tput sgr0
+	fi
+}
 
-# Pass arguments through to another command
-# gh issue list "$@" -R cli/cli
+usage() {
+	echo "Combine several Pull Requests into a single PR"
+	echo ""
+	bold "USAGE"
+	echo "  gh combine <NUMBERS>"
+	echo ""
+	bold "FLAGS"
+	echo "  -h, --help:         Show help for command"
+	echo "  --base BRANCH:      Use specified base BRANCH"
+	echo "  --branch BRANCH:    Use specified BRANCH name"
+	echo "  --title TITLE:      Use specified Pull Request TITLE"
+	echo ""
+	bold "OPTIONS"
+	echo ""
+	echo "  NUMBERS:    List of Pull Request numbers to combine"
+	echo ""
+}
 
-# Using the gh api command to retrieve and format information
-# QUERY='
-#   query($endCursor: String) {
-#     viewer {
-#       repositories(first: 100, after: $endCursor) {
-#         nodes {
-#           nameWithOwner
-#           stargazerCount
-#         }
-#       }
-#     }
-#   }
-# '
-# TEMPLATE='
-#   {{- range $repo := .data.viewer.repositories.nodes -}}
-#     {{- printf "name: %s - stargazers: %v\n" $repo.nameWithOwner $repo.stargazerCount -}}
-#   {{- end -}}
-# '
-# exec gh api graphql -f query="${QUERY}" --paginate --template="${TEMPLATE}"
+err() {
+	if [ "${GITHUB_ACTIONS}" ]
+	then
+		echo "::error::$@"
+	else
+		echo "$@" 1>&2
+	fi
+}
+
+die() {
+	err "$@"
+	exit 1
+}
+
+# parse arguments
+while [ "$#" -gt 0 ]
+do
+	case "$1" in
+		-h | --help   ) usage            ; exit  0 ;;
+
+		--base        ) base="$2"      ; shift 2 ;;
+		--base=*      ) base="${1#*=}" ; shift 1 ;;
+
+		-b | --branch ) branch="$2"      ; shift 2 ;;
+		--branch=*    ) branch="${1#*=}" ; shift 1 ;;
+
+		-t | --title  ) title="$2"       ; shift 2 ;;
+		--title=*     ) title="${1#*=}"  ; shift 1 ;;
+
+		-*            ) die "unknown option '$1'"  ;;
+		*             ) break                      ;;
+	esac
+done
+
+# show usage if nothing to do
+if [ "$#" -eq 0 ]
+then
+	usage
+	exit 1
+fi
+
+# get all PRs' branches
+branches="$(for number in $@
+do
+	gh pr view "$number" --json headRefName --jq '"origin/" + .headRefName' || die "Cannot find PR #$number"
+done)"
+
+# get base branch
+if [ "$base" = "" ]
+then
+	base="$(git rev-parse --abbrev-ref origin/HEAD | sed 's/^origin\///g')"
+fi
+
+# get branch name
+if [ "$branch" = "" ]
+then
+	branch="$(gh api /user --jq '.login')-combine-prs-$(echo "${@}" | tr '[:blank:]' '-')"
+fi
+
+# create new branch
+git checkout "$base" -b "$branch" || die "Cannot checkout new branch"
+
+# merge all branches to new branch
+git merge --no-edit $branches || die "Cannot merge PRs"
+
+# push new branch
+git push || "Cannot push"
+
+# get pr title
+if [ "$title" = "" ]
+then
+	title="Combine PRs"
+fi
+
+# create new PR for new branch
+gh pr create --base "$base" --title "$title" --body "See also:$(echo; for number in $@
+do
+	echo "* #$number"
+done)" || die "Cannot create new PR"
+
+# Close all PRs
+for number in $@
+do
+	gh pr close $number || err "Cannot close PR #$number, skipping..."
+done
+
