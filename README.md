@@ -8,6 +8,8 @@ This is particularly useful for cleaning up @dependabot PRs.
 gh combine --title "Update all dependencies" $(gh pr list --author app/dependabot --json number --jq '.[].number')
 ```
 
+<img src="https://raw.githubusercontent.com/norwd/human/b1bc793d7085ed4532349a4125a5d3d171f6c568/docs/automatic-logo.svg" height="50" />
+
 ## Installation
 
 ```sh
